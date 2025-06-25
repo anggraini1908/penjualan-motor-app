@@ -126,6 +126,24 @@ st.markdown("""
         border: 2px solid #D32F2F;
         margin-bottom: 10px;
     }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #2C2C2C;
+        color: #FFFFFF;
+        border: 2px solid #D32F2F;
+        border-radius: 10px;
+        padding: 10px 20px;
+        font-weight: 700;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #3A3A3A;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background-color: #D32F2F;
+        color: #FFFFFF;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -138,12 +156,18 @@ def hash_password(password):
 def load_users():
     if os.path.exists("users.json"):
         with open("users.json", "r") as f:
-            return json.load(f)
+            users_data = json.load(f)
+            # Ensure all users have a 'name' key
+            for username, user_info in users_data.items():
+                if "name" not in user_info:
+                    user_info["name"] = username # Default to username if name is missing
+            return users_data
     else:
         default = {
             "admin": {
                 "password": hash_password("admin123"),
-                "name": "Admin Honda",
+                "name": "Admin Honda", # Added 'name' key
+                "email": "admin@honda.com",
                 "role": "admin",
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -161,9 +185,40 @@ def authenticate(username, password):
         st.session_state.logged_in = True
         st.session_state.username = username
         st.session_state.user_role = users[username]["role"]
-        st.session_state.user_name = users[username]["name"]
+        st.session_state.user_name = users[username].get("name", username) # Use .get() with default
         return True
     return False
+
+def verify_email_for_reset(email):
+    users = load_users()
+    for username, info in users.items():
+        if info.get("email") == email:
+            return username
+    return None
+
+def load_reset_requests():
+    if os.path.exists("reset_requests.json"):
+        with open("reset_requests.json", "r") as f:
+            return json.load(f)
+    return []
+
+def save_reset_request(email, username):
+    requests = load_reset_requests()
+    requests.append({
+        "email": email,
+        "username": username,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "Pending"
+    })
+    with open("reset_requests.json", "w") as f:
+        json.dump(requests, f, indent=4)
+
+def update_reset_request_status(index, status):
+    requests = load_reset_requests()
+    if 0 <= index < len(requests):
+        requests[index]["status"] = status
+        with open("reset_requests.json", "w") as f:
+            json.dump(requests, f, indent=4)
 
 # ===============================
 # Kelas Motor
@@ -274,7 +329,7 @@ class Pembeli:
         self.status = kwargs.get("Status", "Belum Lunas")
         self.dibuat_oleh = kwargs.get("Dibuat Oleh", "")
         self.tanggal_dibuat = kwargs.get("Tanggal Dibuat", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        self.status_pesanan = kwargs.get("Status Pesanan", "Menunggu Konfirmasi") # NEW: Status Pesanan
+        self.status_pesanan = kwargs.get("Status Pesanan", "Menunggu Konfirmasi")
         cicilan = kwargs.get("Cicilan", [])
         if isinstance(cicilan, str):
             try:
@@ -300,7 +355,7 @@ class Pembeli:
             "Status": self.status,
             "Dibuat Oleh": self.dibuat_oleh,
             "Tanggal Dibuat": self.tanggal_dibuat,
-            "Status Pesanan": self.status_pesanan, # NEW: Status Pesanan
+            "Status Pesanan": self.status_pesanan,
             "Cicilan": self.cicilan
         }
 
@@ -349,7 +404,7 @@ def generate_card(pembeli):
         f"Status Pembelian: {pembeli.status_pembelian}",
         f"Metode Pembayaran: {pembeli.metode_pembayaran}",
         f"Status Pembayaran: {pembeli.status}",
-        f"Status Pesanan: {pembeli.status_pesanan}", # NEW: Status Pesanan
+        f"Status Pesanan: {pembeli.status_pesanan}",
         f"Tanggal Pembelian: {pembeli.tanggal_dibuat}"
     ]
     
@@ -471,8 +526,8 @@ def generate_sales_report(data, period, period_value):
     c.drawString(x_offset + 1*cm, y_offset + report_height - 1.5*cm, f"Periode: {period_value}")
     
     c.setFont("Helvetica", 10)
-    headers = ["No", "Tanggal", "Nama", "Merek", "Harga", "Status", "Status Pesanan", "Input Oleh"] # NEW: Status Pesanan
-    col_widths = [1*cm, 3*cm, 3*cm, 2*cm, 2*cm, 1.5*cm, 2.5*cm, 2*cm] # Adjusted widths
+    headers = ["No", "Tanggal", "Nama", "Merek", "Harga", "Status", "Status Pesanan", "Input Oleh"]
+    col_widths = [1*cm, 3*cm, 3*cm, 2*cm, 2*cm, 1.5*cm, 2.5*cm, 2*cm]
     
     y = y_offset + report_height - 2.5*cm
     c.setFillColor(colors.lightgrey)
@@ -502,7 +557,7 @@ def generate_sales_report(data, period, period_value):
             pembeli.merek_kendaraan,
             f"Rp {pembeli.harga:,}",
             pembeli.status,
-            pembeli.status_pesanan, # NEW: Status Pesanan
+            pembeli.status_pesanan,
             pembeli.dibuat_oleh
         ]
         for i, item in enumerate(row):
@@ -543,7 +598,6 @@ def init_session_state():
     if not st.session_state.data_pembeli:
         if os.path.exists(CSV_FILE):
             df = pd.read_csv(CSV_FILE)
-            # Ensure 'Status Pesanan' column exists, default to 'Menunggu Konfirmasi' if not
             if 'Status Pesanan' not in df.columns:
                 df['Status Pesanan'] = "Menunggu Konfirmasi"
             
@@ -660,17 +714,12 @@ def show_pembelian():
             with col2:
                 jenis_kelamin = st.radio("Jenis Kelamin", ["Laki-laki", "Perempuan"])
                 merek_kendaraan = st.selectbox("Merek Kendaraan", motor.get_daftar())
-                
-                # Nomor Rangka Mesin dan Status Pembayaran awal tidak diisi oleh user
-                nomor_rangka_input = "" 
-                status_pembayaran_awal = "Belum Lunas" # Default untuk permintaan baru
-                
+                nomor_rangka_input = ""
+                status_pembayaran_awal = "Belum Lunas"
                 metode_pembayaran = st.selectbox("Metode Pembayaran", BANKS)
                 harga = motor.get_harga(merek_kendaraan)
                 st.markdown(f"<p style='color: #FFD700;'><i class='fas fa-money-bill-wave'></i> Harga Motor: <strong>Rp {harga:,}</strong></p>", unsafe_allow_html=True)
                 status_pembelian_type = st.selectbox("Jenis Pembelian", ["Cash", "Kredit"])
-                
-                # Status pesanan awal selalu 'Menunggu Konfirmasi' untuk user
                 initial_status_pesanan = "Menunggu Konfirmasi"
             
             if st.form_submit_button("💾 Ajukan Permintaan"):
@@ -689,13 +738,13 @@ def show_pembelian():
                                 "Email": email,
                                 "Jenis Kelamin": jenis_kelamin,
                                 "Merek Kendaraan": merek_kendaraan,
-                                "Nomor Rangka": nomor_rangka_input, # Kosong dari user
+                                "Nomor Rangka": nomor_rangka_input,
                                 "Harga": harga,
                                 "Status Pembelian": status_pembelian_type,
                                 "Metode Pembayaran": metode_pembayaran,
-                                "Status": status_pembayaran_awal, # Belum Lunas dari user
+                                "Status": status_pembayaran_awal,
                                 "Dibuat Oleh": st.session_state.username,
-                                "Status Pesanan": initial_status_pesanan # Status baru
+                                "Status Pesanan": initial_status_pesanan
                             }
                         )
                         st.session_state.data_pembeli.append(pembeli)
@@ -704,7 +753,7 @@ def show_pembelian():
                 else:
                     st.error("❗ Lengkapi semua field wajib!")
         st.markdown("</div>", unsafe_allow_html=True)
-        
+
 # ===============================
 # Halaman Riwayat Pembelian
 # ===============================
@@ -723,12 +772,12 @@ def show_riwayat_pembelian():
                 "Nama": p.nama,
                 "Email": p.email,
                 "Merek Kendaraan": p.merek_kendaraan,
-                "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-", # Display '-' if empty
+                "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-",
                 "Harga": f"Rp {p.harga:,}",
                 "Status Pembelian": p.status_pembelian,
                 "Metode Pembayaran": p.metode_pembayaran,
                 "Status Pembayaran": p.status,
-                "Status Pesanan": p.status_pesanan, # NEW: Status Pesanan
+                "Status Pesanan": p.status_pesanan,
                 "Tanggal": p.tanggal_dibuat
             } for p in user_pembelian])
             
@@ -754,7 +803,6 @@ def show_riwayat_pembelian():
                     st.warning(f"Pesanan motor **{p.merek_kendaraan}** Anda (ID: **{p.id_pembeli}**) sedang **diproses**.")
                 elif p.status_pesanan == "Selesai":
                     st.success(f"Pesanan motor **{p.merek_kendaraan}** Anda (ID: **{p.id_pembeli}**) telah **selesai**. Terima kasih!")
-
         st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("Belum ada riwayat pembelian.")
@@ -776,14 +824,14 @@ def show_data():
             col_filter, col_search = st.columns(2)
             with col_filter:
                 filter_status_pembayaran = st.selectbox("Filter Status Pembayaran", ["Semua", "Belum Lunas", "Lunas"])
-                filter_status_pesanan = st.selectbox("Filter Status Pesanan", ["Semua", "Menunggu Konfirmasi", "Dikonfirmasi", "Ditolak", "Diproses", "Selesai"]) # NEW: Filter Status Pesanan
+                filter_status_pesanan = st.selectbox("Filter Status Pesanan", ["Semua", "Menunggu Konfirmasi", "Dikonfirmasi", "Ditolak", "Diproses", "Selesai"])
             with col_search:
                 st.session_state.search_query = st.text_input("Cari Nama", value=st.session_state.search_query, placeholder="Masukkan nama pembeli...")
             
             filtered_data = st.session_state.data_pembeli
             if filter_status_pembayaran != "Semua":
                 filtered_data = [p for p in filtered_data if p.status == filter_status_pembayaran]
-            if filter_status_pesanan != "Semua": # NEW: Filter Status Pesanan
+            if filter_status_pesanan != "Semua":
                 filtered_data = [p for p in filtered_data if p.status_pesanan == filter_status_pesanan]
             if st.session_state.search_query:
                 filtered_data = [p for p in filtered_data if st.session_state.search_query.lower() in p.nama.lower()]
@@ -798,12 +846,12 @@ def show_data():
                     "Alamat": p.alamat,
                     "Telepon": p.telepon,
                     "Merek Kendaraan": p.merek_kendaraan,
-                    "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-", # Display '-' if empty
+                    "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-",
                     "Harga": f"Rp {p.harga:,}",
                     "Status Pembelian": p.status_pembelian,
                     "Metode Pembayaran": p.metode_pembayaran,
                     "Status Pembayaran": p.status,
-                    "Status Pesanan": p.status_pesanan, # NEW: Status Pesanan
+                    "Status Pesanan": p.status_pesanan,
                     "Input Oleh": p.dibuat_oleh,
                     "Tanggal": p.tanggal_dibuat
                 } for p in filtered_data])
@@ -899,15 +947,10 @@ def show_kelola_data():
                         with col2:
                             jenis_kelamin = st.radio("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0 if selected_pembeli.jenis_kelamin == "Laki-laki" else 1)
                             merek_kendaraan = st.selectbox("Merek Kendaraan", motor.get_daftar(), index=motor.get_daftar().index(selected_pembeli.merek_kendaraan))
-                            
-                            # Nomor Rangka Mesin hanya diisi oleh admin/staff
                             nomor_rangka = st.text_input("Nomor Rangka Mesin", value=selected_pembeli.nomor_rangka, placeholder="Masukkan nomor rangka")
-                            
                             metode_pembayaran = st.selectbox("Metode Pembayaran", BANKS, index=BANKS.index(selected_pembeli.metode_pembayaran) if selected_pembeli.metode_pembayaran in BANKS else 0)
                             status_pembelian = st.selectbox("Status Pembelian", ["Cash", "Kredit"], index=0 if selected_pembeli.status_pembelian == "Cash" else 1)
                             status_pembayaran = st.selectbox("Status Pembayaran", ["Belum Lunas", "Lunas"], index=0 if selected_pembeli.status == "Belum Lunas" else 1)
-                            
-                            # NEW: Status Pesanan
                             status_pesanan_options = ["Menunggu Konfirmasi", "Dikonfirmasi", "Ditolak", "Diproses", "Selesai"]
                             current_status_pesanan_idx = status_pesanan_options.index(selected_pembeli.status_pesanan)
                             new_status_pesanan = st.selectbox("Status Pesanan", status_pesanan_options, index=current_status_pesanan_idx)
@@ -933,7 +976,7 @@ def show_kelola_data():
                                         selected_pembeli.metode_pembayaran = metode_pembayaran
                                         selected_pembeli.status_pembelian = status_pembelian
                                         selected_pembeli.status = status_pembayaran
-                                        selected_pembeli.status_pesanan = new_status_pesanan # NEW: Update Status Pesanan
+                                        selected_pembeli.status_pesanan = new_status_pesanan
                                         simpan_data()
                                         st.success("✅ Data berhasil diperbarui!")
                                 else:
@@ -1065,14 +1108,16 @@ def show_manajemen_pengguna():
                 username = st.text_input("Username", placeholder="Masukkan username")
                 password = st.text_input("Password", type="password", placeholder="Masukkan password")
             with col2:
-                name = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap")
+                name = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap") # Added name input
+                email = st.text_input("Email", placeholder="Masukkan email")
                 role = st.selectbox("Role", ["admin", "staff", "user"], help="Pilih peran pengguna")
             if st.form_submit_button("➕ Tambah Pengguna"):
-                if username and password and name:
+                if username and password and email and name: # Added name to validation
                     if username not in users:
                         users[username] = {
                             "password": hash_password(password),
-                            "name": name,
+                            "name": name, # Store name
+                            "email": email,
                             "role": role,
                             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
@@ -1086,7 +1131,7 @@ def show_manajemen_pengguna():
     
     st.markdown("<h3><i class='fas fa-list'></i> Daftar Pengguna</h3>", unsafe_allow_html=True)
     df_users = pd.DataFrame([
-        {"Username": k, "Nama": v["name"], "Role": v["role"], "Dibuat": v["created_at"]}
+        {"Username": k, "Nama": v.get("name", k), "Email": v["email"], "Role": v["role"], "Dibuat": v["created_at"]} # Use .get() for 'name'
         for k, v in users.items()
     ])
     st.table(df_users.style.set_properties(**{
@@ -1108,21 +1153,23 @@ def show_manajemen_pengguna():
             col1, col2 = st.columns(2)
             with col1:
                 new_password = st.text_input("Password Baru", type="password", placeholder="Kosongkan jika tidak diubah")
-                new_name = st.text_input("Nama Lengkap", value=users[username_to_edit]["name"])
+                new_name = st.text_input("Nama Lengkap", value=users[username_to_edit].get("name", username_to_edit)) # Added name input
+                new_email = st.text_input("Email", value=users[username_to_edit]["email"])
             with col2:
                 new_role = st.selectbox("Role", ["admin", "staff", "user"], index=["admin", "staff", "user"].index(users[username_to_edit]["role"]))
             col_submit, col_delete = st.columns(2)
             with col_submit:
                 if st.form_submit_button("💾 Update Pengguna"):
-                    if new_name:
-                        users[username_to_edit]["name"] = new_name
+                    if new_email and new_name: # Added name to validation
+                        users[username_to_edit]["name"] = new_name # Update name
+                        users[username_to_edit]["email"] = new_email
                         users[username_to_edit]["role"] = new_role
                         if new_password:
                             users[username_to_edit]["password"] = hash_password(new_password)
                         save_users(users)
                         st.success("✅ Pengguna berhasil diperbarui!")
                     else:
-                        st.error("❗ Nama lengkap tidak boleh kosong!")
+                        st.error("❗ Email dan Nama tidak boleh kosong!") # Updated error message
             with col_delete:
                 if st.form_submit_button("🗑️ Hapus Pengguna"):
                     if username_to_edit != st.session_state.username:
@@ -1132,6 +1179,48 @@ def show_manajemen_pengguna():
                         st.rerun()
                     else:
                         st.error("❌ Tidak dapat menghapus pengguna yang sedang login!")
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    with st.container():
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<h3><i class='fas fa-exclamation-circle'></i> Permintaan Reset Password</h3>", unsafe_allow_html=True)
+        reset_requests = load_reset_requests()
+        if reset_requests:
+            df_requests = pd.DataFrame([
+                {"Email": req["email"], "Username": req["username"], "Tanggal": req["timestamp"], "Status": req["status"]}
+                for req in reset_requests
+            ])
+            st.table(df_requests.style.set_properties(**{
+                'background-color': '#2C2C2C',
+                'color': '#FFD700',
+                'border': '1px solid #FFD700',
+                'text-align': 'center',
+                'padding': '10px'
+            }).set_table_styles([
+                {'selector': 'th', 'props': [('background-color', '#FFD700'), ('color', '#1a1a1a'), ('font-weight', 'bold'), ('text-align', 'center')]},
+                {'selector': 'td', 'props': [('border-right', '1px solid #FFD700')]}
+            ]).hide(axis="index"))
+            
+            st.markdown("<h4>Kelola Permintaan Reset</h4>", unsafe_allow_html=True)
+            with st.form("form_manage_reset"):
+                request_index = st.selectbox("Pilih Permintaan", range(len(reset_requests)), format_func=lambda i: f"{reset_requests[i]['email']} - {reset_requests[i]['timestamp']}")
+                new_status = st.selectbox("Ubah Status", ["Pending", "Processed", "Rejected"])
+                col_submit, col_delete = st.columns(2)
+                with col_submit:
+                    if st.form_submit_button("💾 Update Status"):
+                        update_reset_request_status(request_index, new_status)
+                        st.success("✅ Status permintaan reset diperbarui!")
+                        st.rerun()
+                with col_delete:
+                    if st.form_submit_button("🗑️ Hapus Permintaan"):
+                        requests = load_reset_requests()
+                        requests.pop(request_index)
+                        with open("reset_requests.json", "w") as f:
+                            json.dump(requests, f, indent=4)
+                        st.success("✅ Permintaan reset dihapus!")
+                        st.rerun()
+        else:
+            st.info("Belum ada permintaan reset password.")
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ===============================
@@ -1144,45 +1233,68 @@ def show_login_page():
     col1, col2 = st.columns([1, 2])
     with col1:
         with st.container():
-            st.markdown("<div class='card'><h3><i class='fas fa-lock'></i> Login</h3>", unsafe_allow_html=True)
-            with st.form("login_form"):
-                username = st.text_input("Username", placeholder="Masukkan username")
-                password = st.text_input("Password", type="password", placeholder="Masukkan password")
-                if st.form_submit_button("🔐 Login"):
-                    if authenticate(username, password):
-                        st.success(f"✅ Selamat datang, {st.session_state.user_name}!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Username atau password salah!")
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            tabs = st.tabs(["🔐 Login", "📝 Daftar Akun", "🔑 Lupa Password"])
             
-            st.markdown("<h3><i class='fas fa-user-plus'></i> Registrasi</h3>", unsafe_allow_html=True)
-            with st.form("register_form"):
-                new_username = st.text_input("Username Baru", placeholder="Masukkan username")
-                new_password = st.text_input("Password Baru", type="password", placeholder="Masukkan password")
-                new_name = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap")
-                if st.form_submit_button("📝 Daftar"):
-                    users = load_users()
-                    if new_username and new_password and new_name:
-                        if new_username not in users:
-                            users[new_username] = {
-                                "password": hash_password(new_password),
-                                "name": new_name,
-                                "role": "user",
-                                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-                            save_users(users)
-                            st.success("✅ Registrasi berhasil! Silakan login.")
+            # Tab Login
+            with tabs[0]:
+                with st.form("login_form"):
+                    username = st.text_input("Username", placeholder="Masukkan username")
+                    password = st.text_input("Password", type="password", placeholder="Masukkan password")
+                    if st.form_submit_button("🔐 Login"):
+                        if authenticate(username, password):
+                            st.success(f"✅ Selamat datang, {st.session_state.user_name}!")
+                            st.rerun()
                         else:
-                            st.error("❌ Username sudah ada!")
-                    else:
-                        st.error("❗ Lengkapi semua field!")
-                with st.expander("Informasi"):
-                    st.info("Silakan login atau daftar untuk melanjutkan. Hubungi admin jika ada masalah.")
+                            st.error("❌ Username atau password salah!")
+            
+            # Tab Daftar Akun
+            with tabs[1]:
+                with st.form("register_form"):
+                    new_username = st.text_input("Username", placeholder="Masukkan username")
+                    new_name = st.text_input("Nama Lengkap", placeholder="Masukkan nama lengkap Anda") # Added name input
+                    new_email = st.text_input("Email", placeholder="Masukkan email")
+                    new_password = st.text_input("Password", type="password", placeholder="Masukkan password")
+                    if st.form_submit_button("📝 Daftar"):
+                        users = load_users()
+                        if new_username and new_name and new_email and new_password: # Added new_name to validation
+                            if new_username not in users:
+                                users[new_username] = {
+                                    "password": hash_password(new_password),
+                                    "name": new_name, # Store name
+                                    "email": new_email,
+                                    "role": "user",
+                                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                }
+                                save_users(users)
+                                st.success("✅ Registrasi berhasil! Silakan login.")
+                            else:
+                                st.error("❌ Username sudah ada!")
+                        else:
+                            st.error("❗ Lengkapi semua field!")
+            
+            # Tab Lupa Password
+            with tabs[2]:
+                with st.form("reset_password_form"):
+                    email = st.text_input("Email", placeholder="Masukkan email Anda")
+                    if st.form_submit_button("🔑 Kirim Permintaan Reset"):
+                        if email:
+                            username = verify_email_for_reset(email)
+                            if username:
+                                save_reset_request(email, username)
+                                st.success(f"✅ Permintaan reset password telah dikirim ke {email}. Admin akan segera menanganinya.")
+                            else:
+                                st.error("❌ Email tidak ditemukan!")
+                        else:
+                            st.error("❗ Masukkan email!")
+            
+            with st.expander("Informasi"):
+                st.info("Silakan login, daftar, atau gunakan fitur lupa password untuk melanjutkan. Hubungi admin jika ada masalah.")
             st.markdown("</div>", unsafe_allow_html=True)
     
     with col2:
         st.image("https://ik.imagekit.io/zlt25mb52fx/ahmcdn/assets/images/logo/honda.svg", use_container_width=True)
-        st.markdown("<p style='text-align: center; color: #FFD700;'>HONDA MOTOR - Kualitas dan Kepercayaan</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: EDIT: #FFD700;'>HONDA MOTOR - Kualitas dan Kepercayaan</p>", unsafe_allow_html=True)
 
 # ===============================
 # Main
@@ -1201,12 +1313,12 @@ def main():
         
         menu = [
             ("🏠 Home", "Home"),
-            ("📝 Pembelian", "Form Pembelian"), # Changed label
+            ("📝 Pembelian", "Form Pembelian"),
             ("📜 Riwayat Pembelian", "Riwayat Pembelian")
         ]
         if st.session_state.user_role in ["admin", "staff"]:
             menu.extend([
-                ("📊 Data Pembelian", "Data Pembelian"), # Changed label
+                ("📊 Data Pembelian", "Data Pembelian"),
                 ("🛠️ Kelola Data", "Kelola Data"),
                 ("📅 Absensi Cicilan", "Absensi Cicilan")
             ])
@@ -1228,11 +1340,11 @@ def main():
     
     if st.session_state.current_page == "Home":
         show_home()
-    elif st.session_state.current_page == "Form Pembelian": # Changed page name
+    elif st.session_state.current_page == "Form Pembelian":
         show_pembelian()
     elif st.session_state.current_page == "Riwayat Pembelian":
         show_riwayat_pembelian()
-    elif st.session_state.current_page == "Data Pembelian": # Changed page name
+    elif st.session_state.current_page == "Data Pembelian":
         show_data()
     elif st.session_state.current_page == "Kelola Data":
         show_kelola_data()
