@@ -1,5 +1,3 @@
-# penjualan_motor_honda_revisi.py
-
 import streamlit as st
 import pandas as pd
 import hashlib
@@ -33,6 +31,23 @@ BANKS = [
     "BCA", "Mandiri", "BNI", "BRI", "CIMB Niaga", "Danamon",
     "Permata", "Maybank", "Panin", "OCBC NISP", "Lainnya"
 ]
+
+# ===============================
+# Daftar Nomor Rekening Bank
+# ===============================
+BANK_ACCOUNTS = {
+    "BCA": "1234567890 (a.n. PT. Honda Motor Indonesia)",
+    "Mandiri": "0987654321 (a.n. PT. Honda Motor Indonesia)",
+    "BNI": "1122334455 (a.n. PT. Honda Motor Indonesia)",
+    "BRI": "6677889900 (a.n. PT. Honda Motor Indonesia)",
+    "CIMB Niaga": "5544332211 (a.n. PT. Honda Motor Indonesia)",
+    "Danamon": "9988776655 (a.n. PT. Honda Motor Indonesia)",
+    "Permata": "1020304050 (a.n. PT. Honda Motor Indonesia)",
+    "Maybank": "2030405060 (a.n. PT. Honda Motor Indonesia)",
+    "Panin": "3040506070 (a.n. PT. Honda Motor Indonesia)",
+    "OCBC NISP": "4050607080 (a.n. PT. Honda Motor Indonesia)",
+    "Lainnya": "Silakan hubungi admin untuk informasi rekening bank lainnya."
+}
 
 # ===============================
 # Konfigurasi Email (gunakan variabel lingkungan untuk keamanan)
@@ -108,7 +123,7 @@ st.markdown("""
     }
     .stSidebar {
         background: linear-gradient(180deg, #2C2C2C, #1A1A1A);
-        border-right: 2px solid #D32F2F;
+        border-right: 2.5px solid #D32F2F;
         padding: 20px;
         border-radius: 0 20px 20px 0;
     }
@@ -368,11 +383,15 @@ class Pembeli:
         self.dibuat_oleh = kwargs.get("Dibuat Oleh", "")
         self.tanggal_dibuat = kwargs.get("Tanggal Dibuat", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         self.status_pesanan = kwargs.get("Status Pesanan", "Menunggu Konfirmasi")
+        self.jangka_waktu_kredit = kwargs.get("Jangka Waktu Kredit", 0) # New field
+        self.angsuran_per_bulan = kwargs.get("Angsuran Per Bulan", 0) # New field
         cicilan = kwargs.get("Cicilan", [])
         if isinstance(cicilan, str):
             try:
                 cicilan = json.loads(cicilan)
             except json.JSONDecodeError:
+                # Handle malformed JSON by defaulting to empty list
+                print(f"Warning: Malformed JSON for cicilan, defaulting to empty list. Data: {cicilan}")
                 cicilan = []
         self.cicilan = cicilan if isinstance(cicilan, list) else []
 
@@ -394,8 +413,13 @@ class Pembeli:
             "Dibuat Oleh": self.dibuat_oleh,
             "Tanggal Dibuat": self.tanggal_dibuat,
             "Status Pesanan": self.status_pesanan,
-            "Cicilan": self.cicilan
+            "Jangka Waktu Kredit": self.jangka_waktu_kredit, # New field
+            "Angsuran Per Bulan": self.angsuran_per_bulan, # New field
+            "Cicilan": json.dumps(self.cicilan) # Ensure cicilan is stored as JSON string
         }
+    
+    def get_total_paid(self):
+        return sum(c['Jumlah'] for c in self.cicilan) if self.cicilan else 0
 
 # ===============================
 # Fungsi Cetak Kartu
@@ -446,6 +470,10 @@ def generate_card(pembeli):
         f"Tanggal Pembelian: {pembeli.tanggal_dibuat}"
     ]
     
+    if pembeli.status_pembelian == "Kredit":
+        data.append(f"Jangka Waktu Kredit: {pembeli.jangka_waktu_kredit} Tahun")
+        data.append(f"Angsuran Per Bulan: Rp {pembeli.angsuran_per_bulan:,}")
+
     for i, line in enumerate(data):
         c.drawString(x_offset + 1*cm, y_offset + card_height - (2.5*cm + i*0.6*cm), line)
     
@@ -468,7 +496,7 @@ def generate_struk(pembeli, cicilan_data):
     user_info = users.get(cicilan_data['Dibuat Oleh'], {})
     user_display = f"{user_info.get('name', cicilan_data['Dibuat Oleh'])} ({user_info.get('role', '').capitalize()})"
     
-    total_paid = sum(c['Jumlah'] for c in pembeli.cicilan) if pembeli.cicilan else 0
+    total_paid = pembeli.get_total_paid()
     remaining = pembeli.harga - total_paid
     
     c.setFillColor(colors.red)
@@ -628,7 +656,8 @@ def init_session_state():
         "user_name": None,
         "data_pembeli": [],
         "search_query": "",
-        "current_page": "Home"
+        "current_page": "Home",
+        "selected_payment_id": None # New session state for payment
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -638,6 +667,11 @@ def init_session_state():
             df = pd.read_csv(CSV_FILE)
             if 'Status Pesanan' not in df.columns:
                 df['Status Pesanan'] = "Menunggu Konfirmasi"
+            # Ensure new columns exist with default values
+            if 'Jangka Waktu Kredit' not in df.columns:
+                df['Jangka Waktu Kredit'] = 0
+            if 'Angsuran Per Bulan' not in df.columns:
+                df['Angsuran Per Bulan'] = 0
             
             def parse_cicilan(x):
                 if isinstance(x, str) and x:
@@ -653,10 +687,7 @@ def init_session_state():
 def simpan_data():
     try:
         data = [p.to_dict() for p in st.session_state.data_pembeli]
-        for item in data:
-            if not isinstance(item['Cicilan'], list):
-                print(f"Invalid Cicilan data for ID {item['ID']}: {item['Cicilan']}")
-                item['Cicilan'] = []
+        # Ensure 'Cicilan' is stored as a JSON string in the DataFrame
         df = pd.DataFrame(data)
         df.to_csv(CSV_FILE, index=False)
     except PermissionError:
@@ -757,7 +788,22 @@ def show_pembelian():
                 metode_pembayaran = st.selectbox("Metode Pembayaran", BANKS)
                 harga = motor.get_harga(merek_kendaraan)
                 st.markdown(f"<p style='color: #FFD700;'><i class='fas fa-money-bill-wave'></i> Harga Motor: <strong>Rp {harga:,}</strong></p>", unsafe_allow_html=True)
+                
                 status_pembelian_type = st.selectbox("Jenis Pembelian", ["Cash", "Kredit"])
+                
+                jangka_waktu_kredit = 0
+                angsuran_per_bulan = 0
+                if status_pembelian_type == "Kredit":
+                    jangka_waktu_kredit = st.selectbox("Jangka Waktu Kredit (Tahun)", options=[1, 2, 3, 4, 5])
+                    # Simple interest calculation for demonstration
+                    # You might want a more complex formula for real-world scenarios
+                    bunga_tahunan = 0.05 # 5% annual interest rate
+                    total_bunga = harga * bunga_tahunan * jangka_waktu_kredit
+                    total_harga_kredit = harga + total_bunga
+                    angsuran_per_bulan = total_harga_kredit / (jangka_waktu_kredit * 12)
+                    st.info(f"Estimasi Angsuran Per Bulan: Rp {angsuran_per_bulan:,.2f}")
+                    st.info(f"Total Pembayaran Kredit: Rp {total_harga_kredit:,}")
+
                 initial_status_pesanan = "Menunggu Konfirmasi"
             
             if st.form_submit_button("💾 Ajukan Permintaan"):
@@ -782,7 +828,9 @@ def show_pembelian():
                                 "Metode Pembayaran": metode_pembayaran,
                                 "Status": status_pembayaran_awal,
                                 "Dibuat Oleh": st.session_state.username,
-                                "Status Pesanan": initial_status_pesanan
+                                "Status Pesanan": initial_status_pesanan,
+                                "Jangka Waktu Kredit": jangka_waktu_kredit, # Save new field
+                                "Angsuran Per Bulan": angsuran_per_bulan # Save new field
                             }
                         )
                         st.session_state.data_pembeli.append(pembeli)
@@ -804,31 +852,42 @@ def show_riwayat_pembelian():
         with st.container():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<h3><i class='fas fa-list'></i> Daftar Pembelian Anda</h3>", unsafe_allow_html=True)
-            df = pd.DataFrame([{
-                "ID": p.id_pembeli,
-                "NIK": p.nik,
-                "Nama": p.nama,
-                "Email": p.email,
-                "Merek Kendaraan": p.merek_kendaraan,
-                "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-",
-                "Harga": f"Rp {p.harga:,}",
-                "Status Pembelian": p.status_pembelian,
-                "Metode Pembayaran": p.metode_pembayaran,
-                "Status Pembayaran": p.status,
-                "Status Pesanan": p.status_pesanan,
-                "Tanggal": p.tanggal_dibuat
-            } for p in user_pembelian])
             
-            st.table(df.style.set_properties(**{
-                'background-color': '#2C2C2C',
-                'color': '#FFD700',
-                'border': '1px solid #FFD700',
-                'padding': '10px'
-            }).set_table_styles([
-                {'selector': 'th', 'props': [('background-color', '#FFD700'), ('color', '#1a1a1a'), ('font-weight', 'bold'), ('text-align', 'center')]},
-                {'selector': 'td', 'props': [('border-right', '1px solid #FFD700')]}
-            ]).hide(axis="index"))
+            # Display purchases in a more interactive way
+            for p in user_pembelian:
+                st.subheader(f"Pembelian ID: {p.id_pembeli} - {p.merek_kendaraan}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Nama:** {p.nama}")
+                    st.write(f"**NIK:** {p.nik}")
+                    st.write(f"**Email:** {p.email if p.email else '-'}")
+                    st.write(f"**Alamat:** {p.alamat}")
+                    st.write(f"**Telepon:** {p.telepon}")
+                with col2:
+                    st.write(f"**Merek Kendaraan:** {p.merek_kendaraan}")
+                    st.write(f"**Nomor Rangka:** {p.nomor_rangka if p.nomor_rangka else '-'}")
+                    st.write(f"**Harga:** Rp {p.harga:,}")
+                    st.write(f"**Jenis Pembelian:** {p.status_pembelian}")
+                    st.write(f"**Metode Pembayaran:** {p.metode_pembayaran}")
+                    st.write(f"**Status Pembayaran:** {p.status}")
+                    st.write(f"**Status Pesanan:** {p.status_pesanan}")
+                    st.write(f"**Tanggal Pembelian:** {p.tanggal_dibuat}")
+                
+                if p.status_pembelian == "Kredit":
+                    st.write(f"**Jangka Waktu Kredit:** {p.jangka_waktu_kredit} Tahun")
+                    st.write(f"**Angsuran Per Bulan:** Rp {p.angsuran_per_bulan:,.2f}")
+                    st.write(f"**Total Telah Dibayar:** Rp {p.get_total_paid():,}")
+                    st.write(f"**Sisa Pembayaran:** Rp {p.harga - p.get_total_paid():,}")
 
+                # Tombol Bayar Sekarang
+                if p.status_pesanan == "Dikonfirmasi" and p.status == "Belum Lunas":
+                    if st.button(f"Bayar Sekarang untuk ID: {p.id_pembeli}", key=f"pay_button_{p.id_pembeli}"):
+                        st.session_state.selected_payment_id = p.id_pembeli
+                        st.session_state.current_page = "Pembayaran User"
+                        st.rerun()
+                
+                st.markdown("---") # Separator for each purchase
+            
             st.markdown("<h4>Informasi Status Pesanan:</h4>", unsafe_allow_html=True)
             for p in user_pembelian:
                 if p.status_pesanan == "Menunggu Konfirmasi":
@@ -844,6 +903,65 @@ def show_riwayat_pembelian():
         st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("Belum ada riwayat pembelian.")
+
+# ===============================
+# Halaman Pembayaran untuk User
+# ===============================
+def show_pembayaran_user():
+    st.markdown("<h1><i class='fas fa-money-bill-wave'></i> Halaman Pembayaran</h1>", unsafe_allow_html=True)
+
+    if st.session_state.selected_payment_id:
+        selected_pembeli = next((p for p in st.session_state.data_pembeli if p.id_pembeli == st.session_state.selected_payment_id), None)
+
+        if selected_pembeli and selected_pembeli.dibuat_oleh == st.session_state.username:
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown(f"<h3>Detail Pembayaran untuk ID: {selected_pembeli.id_pembeli}</h3>", unsafe_allow_html=True)
+            
+            st.write(f"**Nama Pembeli:** {selected_pembeli.nama}")
+            st.write(f"**Merek Kendaraan:** {selected_pembeli.merek_kendaraan}")
+            st.write(f"**Jenis Pembelian:** {selected_pembeli.status_pembelian}")
+            st.write(f"**Metode Pembayaran:** {selected_pembeli.metode_pembayaran}")
+            
+            if selected_pembeli.status_pembelian == "Cash":
+                st.write(f"**Total yang Harus Dibayar:** Rp {selected_pembeli.harga:,}")
+            elif selected_pembeli.status_pembelian == "Kredit":
+                st.write(f"**Angsuran Per Bulan:** Rp {selected_pembeli.angsuran_per_bulan:,.2f}")
+                st.write(f"**Total Telah Dibayar:** Rp {selected_pembeli.get_total_paid():,}")
+                st.write(f"**Sisa Pembayaran:** Rp {selected_pembeli.harga - selected_pembeli.get_total_paid():,}")
+            
+            st.markdown("---")
+            st.markdown("<h3>Informasi Rekening Bank</h3>", unsafe_allow_html=True)
+            
+            selected_bank = selected_pembeli.metode_pembayaran
+            account_info = BANK_ACCOUNTS.get(selected_bank, "Informasi rekening tidak tersedia. Silakan hubungi admin.")
+            
+            st.info(f"**Bank:** {selected_bank}")
+            st.info(f"**Nomor Rekening:** {account_info}")
+            st.warning("Mohon lakukan transfer sesuai dengan jumlah yang tertera dan simpan bukti transfer Anda.")
+            st.info("Setelah melakukan pembayaran, admin akan memverifikasi pembayaran Anda. Status pembelian Anda akan diperbarui setelah verifikasi.")
+
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.warning("Detail pembayaran tidak ditemukan atau Anda tidak memiliki akses ke pembelian ini.")
+            st.session_state.selected_payment_id = None # Reset
+    else:
+        st.info("Silakan pilih pembelian dari 'Riwayat Pembelian' untuk melihat detail pembayaran.")
+        # Optionally, show a list of pending payments for the user
+        user_pending_payments = [p for p in st.session_state.data_pembeli if p.dibuat_oleh == st.session_state.username and p.status_pesanan == "Dikonfirmasi" and p.status == "Belum Lunas"]
+        if user_pending_payments:
+            st.markdown("<h4>Pembelian Anda yang Menunggu Pembayaran:</h4>", unsafe_allow_html=True)
+            for p in user_pending_payments:
+                col_p, col_btn = st.columns([3,1])
+                with col_p:
+                    st.write(f"ID: **{p.id_pembeli}** - **{p.merek_kendaraan}** (Rp {p.harga:,}) - Status: **{p.status}**")
+                with col_btn:
+                    if st.button(f"Bayar {p.id_pembeli}", key=f"pay_list_button_{p.id_pembeli}"):
+                        st.session_state.selected_payment_id = p.id_pembeli
+                        st.session_state.current_page = "Pembayaran User"
+                        st.rerun()
+        else:
+            st.info("Tidak ada pembelian yang menunggu pembayaran saat ini.")
+
 
 # ===============================
 # Halaman Data Pembelian
@@ -887,6 +1005,7 @@ def show_data():
                     "Nomor Rangka": p.nomor_rangka if p.nomor_rangka else "-",
                     "Harga": f"Rp {p.harga:,}",
                     "Status Pembelian": p.status_pembelian,
+                    "Nominal Telah Dibayarkan": f"Rp {p.get_total_paid():,}", # New column
                     "Metode Pembayaran": p.metode_pembayaran,
                     "Status Pembayaran": p.status,
                     "Status Pesanan": p.status_pesanan,
@@ -957,7 +1076,10 @@ def show_kelola_data():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<h3><i class='fas fa-search'></i> Cari Data</h3>", unsafe_allow_html=True)
             search_rangka = st.text_input("Cari Nomor Rangka", placeholder="Masukkan nomor rangka...")
-            filtered_pembeli = [p for p in st.session_state.data_pembeli if search_rangka.lower() in p.nomor_rangka.lower()] if search_rangka else st.session_state.data_pembeli
+            filtered_pembeli = [
+                p for p in st.session_state.data_pembeli 
+                if search_rangka.lower() in str(p.nomor_rangka).lower()  # Mengonversi nomor_rangka ke string
+            ] if search_rangka else st.session_state.data_pembeli
             
             if filtered_pembeli:
                 pembeli_options = {p.id_pembeli: p.nama for p in filtered_pembeli}
@@ -988,6 +1110,18 @@ def show_kelola_data():
                             nomor_rangka = st.text_input("Nomor Rangka Mesin", value=selected_pembeli.nomor_rangka, placeholder="Masukkan nomor rangka")
                             metode_pembayaran = st.selectbox("Metode Pembayaran", BANKS, index=BANKS.index(selected_pembeli.metode_pembayaran) if selected_pembeli.metode_pembayaran in BANKS else 0)
                             status_pembelian = st.selectbox("Status Pembelian", ["Cash", "Kredit"], index=0 if selected_pembeli.status_pembelian == "Cash" else 1)
+                            
+                            jangka_waktu_kredit_edit = selected_pembeli.jangka_waktu_kredit
+                            angsuran_per_bulan_edit = selected_pembeli.angsuran_per_bulan
+                            if status_pembelian == "Kredit":
+                                jangka_waktu_kredit_edit = st.selectbox("Jangka Waktu Kredit (Tahun)", options=[1, 2, 3, 4, 5], index=jangka_waktu_kredit_edit-1 if jangka_waktu_kredit_edit > 0 else 0)
+                                bunga_tahunan = 0.05
+                                total_bunga = selected_pembeli.harga * bunga_tahunan * jangka_waktu_kredit_edit
+                                total_harga_kredit = selected_pembeli.harga + total_bunga
+                                angsuran_per_bulan_edit = total_harga_kredit / (jangka_waktu_kredit_edit * 12)
+                                st.info(f"Estimasi Angsuran Per Bulan: Rp {angsuran_per_bulan_edit:,.2f}")
+                                st.info(f"Total Pembayaran Kredit: Rp {total_harga_kredit:,}")
+                            
                             status_pembayaran = st.selectbox("Status Pembayaran", ["Belum Lunas", "Lunas"], index=0 if selected_pembeli.status == "Belum Lunas" else 1)
                             status_pesanan_options = ["Menunggu Konfirmasi", "Dikonfirmasi", "Ditolak", "Diproses", "Selesai"]
                             current_status_pesanan_idx = status_pesanan_options.index(selected_pembeli.status_pesanan)
@@ -1013,6 +1147,8 @@ def show_kelola_data():
                                         selected_pembeli.harga = motor.get_harga(merek_kendaraan)
                                         selected_pembeli.metode_pembayaran = metode_pembayaran
                                         selected_pembeli.status_pembelian = status_pembelian
+                                        selected_pembeli.jangka_waktu_kredit = jangka_waktu_kredit_edit # Update new field
+                                        selected_pembeli.angsuran_per_bulan = angsuran_per_bulan_edit # Update new field
                                         selected_pembeli.status = status_pembayaran
                                         selected_pembeli.status_pesanan = new_status_pesanan
                                         simpan_data()
@@ -1048,7 +1184,10 @@ def show_cicilan():
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<h3><i class='fas fa-search'></i> Cari Pembeli Kredit</h3>", unsafe_allow_html=True)
                 search_rangka = st.text_input("Cari Nomor Rangka", placeholder="Masukkan nomor rangka...")
-                filtered_pembeli = [p for p in kredit_pembeli if search_rangka.lower() in p.nomor_rangka.lower()] if search_rangka else kredit_pembeli
+                filtered_pembeli = [
+                    p for p in st.session_state.data_pembeli 
+                    if search_rangka.lower() in str(p.nomor_rangka).lower()  # Mengonversi nomor_rangka ke string
+                ] if search_rangka else st.session_state.data_pembeli
                 
                 if filtered_pembeli:
                     pembeli_options = {p.id_pembeli: p.nama for p in filtered_pembeli}
@@ -1057,6 +1196,9 @@ def show_cicilan():
                     
                     if selected_pembeli:
                         st.markdown(f"<h4>Data Pembeli: {selected_pembeli.nama}</h4>", unsafe_allow_html=True)
+                        st.info(f"Jangka Waktu Kredit: {selected_pembeli.jangka_waktu_kredit} Tahun")
+                        st.info(f"Angsuran Per Bulan: Rp {selected_pembeli.angsuran_per_bulan:,.2f}")
+
                         with st.form("form_cicilan"):
                             bulan = st.selectbox("Bulan Cicilan", [f"Bulan {i+1}" for i in range(12)])
                             jumlah_bayar = st.number_input("Jumlah Pembayaran (Rp)", min_value=0)
@@ -1073,6 +1215,8 @@ def show_cicilan():
                                 st.session_state.last_cicilan = cicilan_data
                                 st.session_state.last_pembeli = selected_pembeli
                                 st.success("✅ Data cicilan berhasil ditambahkan!")
+                                # Force rerun to refresh the metrics and table
+                                st.rerun() # <--- Tambahkan rerun di sini
                         
                         if 'last_cicilan' in st.session_state and 'last_pembeli' in st.session_state and st.session_state.last_pembeli.id_pembeli == selected_pembeli.id_pembeli:
                             struk_buffer = generate_struk(st.session_state.last_pembeli, st.session_state.last_cicilan)
@@ -1098,7 +1242,7 @@ def show_cicilan():
                                     {'selector': 'td', 'props': [('border-right', '1px solid #FFD700')]}
                                 ]).hide(axis="index"))
                                 
-                                total_cicilan = sum(cicilan['Jumlah'] for cicilan in selected_pembeli.cicilan)
+                                total_cicilan = selected_pembeli.get_total_paid()
                                 sisa_pembayaran = selected_pembeli.harga - total_cicilan
                                 
                                 col1, col2, col3 = st.columns(3)
@@ -1125,6 +1269,106 @@ def show_cicilan():
             st.info("Belum ada pembeli dengan status kredit.")
     else:
         st.info("Belum ada data pembelian yang tercatat.")
+
+# ===============================
+# Halaman Manajemen Keuangan (New)
+# ===============================
+def show_manajemen_keuangan():
+    if st.session_state.user_role != "admin":
+        st.warning("⚠️ Akses ditolak. Hanya admin yang dapat melihat manajemen keuangan.")
+        return
+
+    st.markdown("<h1><i class='fas fa-wallet'></i> Manajemen Keuangan</h1>", unsafe_allow_html=True)
+
+    total_pendapatan_cash = 0
+    total_cicilan_terkumpul = 0
+    total_piutang = 0
+    
+    # Data untuk grafik pendapatan bulanan
+    monthly_income = {}
+
+    for p in st.session_state.data_pembeli:
+        if p.status_pembelian == "Cash":
+            total_pendapatan_cash += p.harga
+        elif p.status_pembelian == "Kredit":
+            total_cicilan_terkumpul += p.get_total_paid()
+            total_piutang += (p.harga - p.get_total_paid()) # Sisa piutang dari harga awal
+
+        # Hitung pendapatan bulanan
+        if p.tanggal_dibuat:
+            try:
+                date_obj = datetime.strptime(p.tanggal_dibuat, "%Y-%m-%d %H:%M:%S")
+                month_year = date_obj.strftime("%Y-%m")
+                if month_year not in monthly_income:
+                    monthly_income[month_year] = 0
+                
+                if p.status_pembelian == "Cash":
+                    monthly_income[month_year] += p.harga
+                else: # Kredit, hitung cicilan yang terkumpul pada bulan tersebut
+                    for cicilan in p.cicilan:
+                        cicilan_date_obj = datetime.strptime(cicilan['Tanggal'], "%Y-%m-%d")
+                        if cicilan_date_obj.strftime("%Y-%m") == month_year:
+                            monthly_income[month_year] += cicilan['Jumlah']
+            except ValueError:
+                pass # Handle cases where date format might be incorrect
+
+    total_pendapatan_keseluruhan = total_pendapatan_cash + total_cicilan_terkumpul
+
+    with st.container():
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<h3><i class='fas fa-chart-line'></i> Ringkasan Keuangan</h3>", unsafe_allow_html=True)
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Pendapatan (Cash)", f"Rp {total_pendapatan_cash:,}")
+        with col2:
+            st.metric("Total Cicilan Terkumpul", f"Rp {total_cicilan_terkumpul:,}")
+        with col3:
+            st.metric("Total Pendapatan Keseluruhan", f"Rp {total_pendapatan_keseluruhan:,}")
+        with col4:
+            st.metric("Total Piutang (Kredit)", f"Rp {total_piutang:,}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.container():
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<h3><i class='fas fa-chart-bar'></i> Pendapatan Bulanan</h3>", unsafe_allow_html=True)
+        if monthly_income:
+            df_monthly_income = pd.DataFrame(monthly_income.items(), columns=['Bulan', 'Pendapatan'])
+            df_monthly_income['Bulan'] = pd.to_datetime(df_monthly_income['Bulan'])
+            df_monthly_income = df_monthly_income.sort_values(by='Bulan')
+            st.bar_chart(df_monthly_income.set_index('Bulan'))
+        else:
+            st.info("Belum ada data pendapatan bulanan.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.container():
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<h3><i class='fas fa-table'></i> Detail Transaksi Pembelian</h3>", unsafe_allow_html=True)
+        if st.session_state.data_pembeli:
+            df_transactions = pd.DataFrame([{
+                "ID": p.id_pembeli,
+                "Tanggal": p.tanggal_dibuat,
+                "Nama Pembeli": p.nama,
+                "Merek Kendaraan": p.merek_kendaraan,
+                "Jenis Pembelian": p.status_pembelian,
+                "Harga Motor": f"Rp {p.harga:,}",
+                "Nominal Telah Dibayarkan": f"Rp {p.get_total_paid():,}",
+                "Sisa Pembayaran": f"Rp {p.harga - p.get_total_paid():,}" if p.status_pembelian == "Kredit" else "N/A",
+                "Status Pembayaran": p.status,
+                "Status Pesanan": p.status_pesanan
+            } for p in st.session_state.data_pembeli])
+            st.table(df_transactions.style.set_properties(**{
+                'background-color': '#2C2C2C',
+                'color': '#FFD700',
+                'border': '1px solid #FFD700',
+                'padding': '10px'
+            }).set_table_styles([
+                {'selector': 'th', 'props': [('background-color', '#FFD700'), ('color', '#1a1a1a'), ('font-weight', 'bold'), ('text-align', 'center')]},
+                {'selector': 'td', 'props': [('border-right', '1px solid #FFD700')]}
+            ]).hide(axis="index"))
+        else:
+            st.info("Belum ada data transaksi pembelian.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ===============================
 # Halaman Manajemen Pengguna
@@ -1397,11 +1641,17 @@ def main():
             ("📝 Pembelian", "Form Pembelian"),
             ("📜 Riwayat Pembelian", "Riwayat Pembelian")
         ]
+        
+        # Tambahkan menu Pembayaran untuk user
+        if st.session_state.user_role == "user":
+            menu.append(("💳 Pembayaran", "Pembayaran User"))
+
         if st.session_state.user_role in ["admin", "staff"]:
             menu.extend([
                 ("📊 Data Pembelian", "Data Pembelian"),
                 ("🛠️ Kelola Data", "Kelola Data"),
-                ("📅 Absensi Cicilan", "Absensi Cicilan")
+                ("📅 Absensi Cicilan", "Absensi Cicilan"),
+                ("💰 Manajemen Keuangan", "Manajemen Keuangan") # New menu item
             ])
         if st.session_state.user_role == "admin":
             menu.append(("👥 Manajemen Pengguna", "Manajemen Pengguna"))
@@ -1425,12 +1675,16 @@ def main():
         show_pembelian()
     elif st.session_state.current_page == "Riwayat Pembelian":
         show_riwayat_pembelian()
+    elif st.session_state.current_page == "Pembayaran User":
+        show_pembayaran_user()
     elif st.session_state.current_page == "Data Pembelian":
         show_data()
     elif st.session_state.current_page == "Kelola Data":
         show_kelola_data()
     elif st.session_state.current_page == "Absensi Cicilan":
         show_cicilan()
+    elif st.session_state.current_page == "Manajemen Keuangan":
+        show_manajemen_keuangan()
     elif st.session_state.current_page == "Manajemen Pengguna":
         show_manajemen_pengguna()
 
