@@ -1,3 +1,5 @@
+# penjualan_motor_honda_revisi.py
+
 import streamlit as st
 import pandas as pd
 import hashlib
@@ -9,6 +11,11 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
 from reportlab.lib import colors
 from io import BytesIO
+
+# Import untuk fungsionalitas email
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # ===============================
 # Konfigurasi Halaman
@@ -26,6 +33,36 @@ BANKS = [
     "BCA", "Mandiri", "BNI", "BRI", "CIMB Niaga", "Danamon",
     "Permata", "Maybank", "Panin", "OCBC NISP", "Lainnya"
 ]
+
+# ===============================
+# Konfigurasi Email (gunakan variabel lingkungan untuk keamanan)
+# ===============================
+SENDER_EMAIL = os.getenv("EMAIL_ADDRESS")
+SENDER_PASSWORD = os.getenv("EMAIL_PASSWORD")
+SMTP_SERVER = "smtp.gmail.com" # Contoh untuk Gmail
+SMTP_PORT = 587 # Port TLS/STARTTLS
+
+def send_email(receiver_email, subject, body):
+    if not SENDER_EMAIL or not SENDER_PASSWORD:
+        st.error("❌ Konfigurasi email pengirim tidak ditemukan. Harap atur variabel lingkungan EMAIL_ADDRESS dan EMAIL_PASSWORD.")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = receiver_email
+        msg['Subject'] = subject
+
+        msg.attach(MIMEText(body, 'plain'))
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        st.error(f"❌ Gagal mengirim email: {e}")
+        return False
 
 # ===============================
 # Styling CSS
@@ -202,13 +239,14 @@ def load_reset_requests():
             return json.load(f)
     return []
 
-def save_reset_request(email, username):
+def save_reset_request(email, username, message=""): # Tambahkan parameter message
     requests = load_reset_requests()
     requests.append({
         "email": email,
         "username": username,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "Pending"
+        "status": "Pending",
+        "message": message # Simpan pesan
     })
     with open("reset_requests.json", "w") as f:
         json.dump(requests, f, indent=4)
@@ -1184,10 +1222,13 @@ def show_manajemen_pengguna():
     with st.container():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<h3><i class='fas fa-exclamation-circle'></i> Permintaan Reset Password</h3>", unsafe_allow_html=True)
-        reset_requests = load_reset_requests()
+        
+        # Muat ulang permintaan di dalam form agar selalu up-to-date
+        reset_requests = load_reset_requests() 
+
         if reset_requests:
             df_requests = pd.DataFrame([
-                {"Email": req["email"], "Username": req["username"], "Tanggal": req["timestamp"], "Status": req["status"]}
+                {"Email": req["email"], "Username": req["username"], "Tanggal": req["timestamp"], "Status": req["status"], "Pesan": req.get("message", "-")}
                 for req in reset_requests
             ])
             st.table(df_requests.style.set_properties(**{
@@ -1203,13 +1244,42 @@ def show_manajemen_pengguna():
             
             st.markdown("<h4>Kelola Permintaan Reset</h4>", unsafe_allow_html=True)
             with st.form("form_manage_reset"):
-                request_index = st.selectbox("Pilih Permintaan", range(len(reset_requests)), format_func=lambda i: f"{reset_requests[i]['email']} - {reset_requests[i]['timestamp']}")
-                new_status = st.selectbox("Ubah Status", ["Pending", "Processed", "Rejected"])
+                request_index = st.selectbox("Pilih Permintaan", range(len(reset_requests)), format_func=lambda i: f"{reset_requests[i]['email']} - {reset_requests[i]['timestamp']} - Status: {reset_requests[i]['status']}")
+                
+                # Tampilkan pesan dari user
+                st.info(f"Pesan dari pengguna: {reset_requests[request_index].get('message', 'Tidak ada pesan.')}")
+
+                new_status = st.selectbox("Ubah Status", ["Pending", "Processed", "Rejected"], index=["Pending", "Processed", "Rejected"].index(reset_requests[request_index]['status']))
+                
                 col_submit, col_delete = st.columns(2)
                 with col_submit:
-                    if st.form_submit_button("💾 Update Status"):
+                    if st.form_submit_button("💾 Update Status & Kirim Email"):
+                        # Dapatkan informasi permintaan sebelum diupdate
+                        current_request = reset_requests[request_index]
+                        user_email_to_notify = current_request['email']
+                        username_to_notify = current_request['username']
+
                         update_reset_request_status(request_index, new_status)
                         st.success("✅ Status permintaan reset diperbarui!")
+
+                        # Kirim email notifikasi
+                        subject = f"Pembaruan Permintaan Reset Password Anda - Honda Motor"
+                        body = f"Halo {username_to_notify},\n\n" \
+                               f"Permintaan reset password Anda untuk akun {username_to_notify} telah diperbarui.\n" \
+                               f"Status terbaru: {new_status}.\n\n"
+                        
+                        if new_status == "Processed":
+                            body += "Permintaan Anda telah disetujui. Silakan hubungi admin untuk mendapatkan password baru Anda atau instruksi lebih lanjut.\n"
+                        elif new_status == "Rejected":
+                            body += "Permintaan Anda ditolak. Jika Anda merasa ini adalah kesalahan, silakan hubungi admin.\n"
+                        
+                        body += "\nTerima kasih,\nTim Honda Motor"
+
+                        if send_email(user_email_to_notify, subject, body):
+                            st.success(f"✅ Email notifikasi berhasil dikirim ke {user_email_to_notify}.")
+                        else:
+                            st.error(f"❌ Gagal mengirim email notifikasi ke {user_email_to_notify}.")
+                        
                         st.rerun()
                 with col_delete:
                     if st.form_submit_button("🗑️ Hapus Permintaan"):
@@ -1277,18 +1347,29 @@ def show_login_page():
             with tabs[2]:
                 with st.form("reset_password_form"):
                     email = st.text_input("Email", placeholder="Masukkan email Anda")
+                    # Tambahan: Input Username
+                    username_reset = st.text_input("Username", placeholder="Masukkan username Anda")
+                    # Tambahan: Input Pesan
+                    message_reset = st.text_area("Pesan untuk Admin (opsional)", placeholder="Contoh: Saya lupa password akun saya.")
                     if st.form_submit_button("🔑 Kirim Permintaan Reset"):
-                        if email:
-                            username = verify_email_for_reset(email)
-                            if username:
-                                save_reset_request(email, username)
+                        if email and username_reset: # Validasi email dan username
+                            # Verifikasi email dan username
+                            users = load_users()
+                            found_user = None
+                            for uname, info in users.items():
+                                if info.get("email") == email and uname == username_reset:
+                                    found_user = uname
+                                    break
+
+                            if found_user:
+                                save_reset_request(email, found_user, message_reset) # Kirim pesan juga
                                 st.success(f"✅ Permintaan reset password telah dikirim ke {email}. Admin akan segera menanganinya.")
                             else:
-                                st.error("❌ Email tidak ditemukan!")
+                                st.error("❌ Email atau Username tidak ditemukan!")
                         else:
-                            st.error("❗ Masukkan email!")
+                            st.error("❗ Masukkan email dan username!")
             
-            with st.expander("Informasi"):
+            with st.info("Informasi"):
                 st.info("Silakan login, daftar, atau gunakan fitur lupa password untuk melanjutkan. Hubungi admin jika ada masalah.")
             st.markdown("</div>", unsafe_allow_html=True)
     
