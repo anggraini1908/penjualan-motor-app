@@ -768,10 +768,72 @@ def show_home():
 # ===============================
 def show_pembelian():
     st.markdown("<h1><i class='fas fa-clipboard-list'></i> Formulir Pembelian Motor</h1>", unsafe_allow_html=True)
-    
+
+    # Initialize session state for dynamic form fields
+    if "merek_kendaraan" not in st.session_state:
+        st.session_state.merek_kendaraan = motor.get_daftar()[0]
+    if "status_pembelian_type" not in st.session_state:
+        st.session_state.status_pembelian_type = "Cash"
+    if "jangka_waktu_kredit" not in st.session_state:
+        st.session_state.jangka_waktu_kredit = 1
+
+    def on_merek_change():
+        st.session_state.merek_kendaraan = st.session_state.merek_kendaraan_select
+        # Reset kredit related fields when merek changed
+        st.session_state.status_pembelian_type = "Cash"
+        st.session_state.jangka_waktu_kredit = 1
+
+    def on_status_pembelian_change():
+        st.session_state.status_pembelian_type = st.session_state.status_pembelian_select
+        if st.session_state.status_pembelian_type == "Cash":
+            st.session_state.jangka_waktu_kredit = 0
+        else:
+            if st.session_state.jangka_waktu_kredit == 0:
+                st.session_state.jangka_waktu_kredit = 1
+
+    def on_jangka_waktu_kredit_change():
+        st.session_state.jangka_waktu_kredit = st.session_state.jangka_waktu_kredit_select
+
     with st.container():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<h3><i class='fas fa-plus-circle'></i> Ajukan Permintaan Pembelian</h3>", unsafe_allow_html=True)
+
+        # Move selectboxes with on_change outside the form to avoid StreamlitInvalidFormCallbackError
+        merek_kendaraan = st.selectbox(
+            "Merek Kendaraan",
+            motor.get_daftar(),
+            index=motor.get_daftar().index(st.session_state.merek_kendaraan),
+            key="merek_kendaraan_select",
+            on_change=on_merek_change
+        )
+        status_pembelian_type = st.selectbox(
+            "Jenis Pembelian",
+            ["Cash", "Kredit"],
+            index=0 if st.session_state.status_pembelian_type == "Cash" else 1,
+            key="status_pembelian_select",
+            on_change=on_status_pembelian_change
+        )
+        harga = motor.get_harga(st.session_state.merek_kendaraan)
+        st.markdown(f"<p style='color: #FFD700;'><i class='fas fa-money-bill-wave'></i> Harga Motor: <strong>Rp {harga:,}</strong></p>", unsafe_allow_html=True)
+
+        if st.session_state.status_pembelian_type == "Kredit":
+            jangka_waktu_kredit = st.selectbox(
+                "Jangka Waktu Kredit (Tahun)",
+                options=[1, 2, 3, 4, 5],
+                index=st.session_state.jangka_waktu_kredit - 1 if st.session_state.jangka_waktu_kredit > 0 else 0,
+                key="jangka_waktu_kredit_select",
+                on_change=on_jangka_waktu_kredit_change
+            )
+            bunga_tahunan = 0.05  # 5% annual interest rate
+            total_bunga = harga * bunga_tahunan * st.session_state.jangka_waktu_kredit
+            total_harga_kredit = harga + total_bunga
+            angsuran_per_bulan = total_harga_kredit / (st.session_state.jangka_waktu_kredit * 12)
+            st.info(f"Estimasi Angsuran Per Bulan: Rp {angsuran_per_bulan:,.2f}")
+            st.info(f"Total Pembayaran Kredit: Rp {total_harga_kredit:,}")
+        else:
+            jangka_waktu_kredit = 0
+            angsuran_per_bulan = 0
+
         with st.form("form_pembelian"):
             col1, col2 = st.columns(2)
             with col1:
@@ -782,30 +844,12 @@ def show_pembelian():
                 email = st.text_input("Email (opsional)", placeholder="Masukkan email")
             with col2:
                 jenis_kelamin = st.radio("Jenis Kelamin", ["Laki-laki", "Perempuan"])
-                merek_kendaraan = st.selectbox("Merek Kendaraan", motor.get_daftar())
                 nomor_rangka_input = ""
                 status_pembayaran_awal = "Belum Lunas"
                 metode_pembayaran = st.selectbox("Metode Pembayaran", BANKS)
-                harga = motor.get_harga(merek_kendaraan)
-                st.markdown(f"<p style='color: #FFD700;'><i class='fas fa-money-bill-wave'></i> Harga Motor: <strong>Rp {harga:,}</strong></p>", unsafe_allow_html=True)
-                
-                status_pembelian_type = st.selectbox("Jenis Pembelian", ["Cash", "Kredit"])
-                
-                jangka_waktu_kredit = 0
-                angsuran_per_bulan = 0
-                if status_pembelian_type == "Kredit":
-                    jangka_waktu_kredit = st.selectbox("Jangka Waktu Kredit (Tahun)", options=[1, 2, 3, 4, 5])
-                    # Simple interest calculation for demonstration
-                    # You might want a more complex formula for real-world scenarios
-                    bunga_tahunan = 0.05 # 5% annual interest rate
-                    total_bunga = harga * bunga_tahunan * jangka_waktu_kredit
-                    total_harga_kredit = harga + total_bunga
-                    angsuran_per_bulan = total_harga_kredit / (jangka_waktu_kredit * 12)
-                    st.info(f"Estimasi Angsuran Per Bulan: Rp {angsuran_per_bulan:,.2f}")
-                    st.info(f"Total Pembayaran Kredit: Rp {total_harga_kredit:,}")
 
-                initial_status_pesanan = "Menunggu Konfirmasi"
-            
+            initial_status_pesanan = "Menunggu Konfirmasi"
+
             if st.form_submit_button("💾 Ajukan Permintaan"):
                 if nik and nama and alamat and telepon:
                     if len(nik) != 16:
@@ -821,16 +865,16 @@ def show_pembelian():
                             **{
                                 "Email": email,
                                 "Jenis Kelamin": jenis_kelamin,
-                                "Merek Kendaraan": merek_kendaraan,
+                                "Merek Kendaraan": st.session_state.merek_kendaraan,
                                 "Nomor Rangka": nomor_rangka_input,
                                 "Harga": harga,
-                                "Status Pembelian": status_pembelian_type,
+                                "Status Pembelian": st.session_state.status_pembelian_type,
                                 "Metode Pembayaran": metode_pembayaran,
                                 "Status": status_pembayaran_awal,
                                 "Dibuat Oleh": st.session_state.username,
                                 "Status Pesanan": initial_status_pesanan,
-                                "Jangka Waktu Kredit": jangka_waktu_kredit, # Save new field
-                                "Angsuran Per Bulan": angsuran_per_bulan # Save new field
+                                "Jangka Waktu Kredit": jangka_waktu_kredit,
+                                "Angsuran Per Bulan": angsuran_per_bulan
                             }
                         )
                         st.session_state.data_pembeli.append(pembeli)
